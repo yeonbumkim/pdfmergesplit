@@ -1,2 +1,7 @@
+# 개발자: Yeonbum Kim (yeonbumk@gmail.com)
 streamlit
-PyPDF2 
+PyPDF2
+pdf2image
+Pillow
+PyMuPDF
+reportlab 
