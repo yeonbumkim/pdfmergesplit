@@ -206,6 +206,39 @@ def add_text_watermark_to_pdf(file, text, color=(255,0,0)) -> bytes:
     writer.write(output)
     return output.getvalue()
 
+# PDF 암호 해제 함수 (여러 파일, 각기 다른 암호 지원)
+def unlock_pdfs(files, passwords):
+    results = {}
+    for file, password in zip(files, passwords):
+        try:
+            reader = PdfReader(file)
+            if reader.is_encrypted:
+                # Owner Password만 있는 경우는 빈 문자열로도 해제 시도
+                if password:
+                    reader.decrypt(password)
+                else:
+                    reader.decrypt("")
+            writer = PdfWriter()
+            for page in reader.pages:
+                writer.add_page(page)
+            output = io.BytesIO()
+            writer.write(output)
+            results[file.name] = output.getvalue()
+        except Exception as e:
+            results[file.name] = None  # 실패 표시
+    return results
+
+# PDF 암호 설정 함수
+def encrypt_pdf(file, password):
+    reader = PdfReader(file)
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    writer.encrypt(user_password=password, owner_password=None, use_128bit=True)
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
 # 파일 업로드 및 세션 상태 관리 함수 (widget_key와 session_key 분리)
 def file_upload_with_session(session_key, widget_key, label, type='pdf', accept_multiple_files=False):
     uploaded = st.file_uploader(label, type=type, accept_multiple_files=accept_multiple_files, key=widget_key)
@@ -214,8 +247,8 @@ def file_upload_with_session(session_key, widget_key, label, type='pdf', accept_
     return st.session_state.get(session_key, None)
 
 # Streamlit UI
-st.set_page_config(page_title='PDF 병합/분할 툴', layout='centered')
-st.title('📄 PDF 병합 및 분할 웹앱')
+st.set_page_config(page_title='PDF Toolbox Version 1.1', layout='centered')
+st.title('📄 PDF Toolbox Version 1.1')
 
 st.sidebar.header('모드 선택')
 mode = st.sidebar.radio('작업 모드', ['병합 (Merge)', '분할 (Split)', 'PDF 편집 (Edit)'])
@@ -272,73 +305,115 @@ elif mode == '분할 (Split)':
 elif mode == 'PDF 편집 (Edit)':
     st.subheader('PDF 편집 기능')
     edit_file = file_upload_with_session('edit_file_session', 'edit_file_widget', 'PDF 파일 업로드')
-    edit_tab = st.selectbox('기능 선택', ['페이지 회전', '페이지 삭제', '워터마크 추가', '페이지 순서 변경'])
+    edit_tab = st.selectbox('기능 선택', [
+        '페이지 회전',
+        '페이지 삭제',
+        '워터마크 추가',
+        '페이지 순서 변경',
+        'PDF 암호 설정',
+        'PDF 암호 해제'
+    ])
 
-    if edit_file:
-        if edit_tab == '페이지 회전':
-            st.info('예: 1:90,3:180 (1번 페이지 90도, 3번 페이지 180도 회전)')
-            rotate_str = st.text_input('회전할 페이지:각도 입력', '')
-            if st.button('회전 적용'):
-                try:
-                    rotations = {}
-                    for part in rotate_str.split(','):
-                        if ':' in part:
-                            p, d = part.split(':')
-                            p, d = int(p.strip()), int(d.strip())
-                            if d not in [90, 180, 270]:
-                                raise ValueError
-                            rotations[p] = d
-                    rotated = rotate_pdf_pages(edit_file, rotations)
-                    st.success('회전 완료!')
-                    st.download_button('회전된 PDF 다운로드', rotated, file_name='rotated.pdf', mime='application/pdf')
-                except Exception:
-                    st.error('입력 형식을 확인하세요. 예: 1:90,3:180')
-
-        elif edit_tab == '페이지 삭제':
-            st.info('예: 2,4 (2번, 4번 페이지 삭제)')
-            del_str = st.text_input('삭제할 페이지 번호 입력', '')
-            if st.button('페이지 삭제'):
-                try:
-                    del_pages = [int(x.strip()) for x in del_str.split(',') if x.strip()]
-                    deleted = delete_pdf_pages(edit_file, del_pages)
-                    st.success('삭제 완료!')
-                    st.download_button('삭제된 PDF 다운로드', deleted, file_name='deleted.pdf', mime='application/pdf')
-                except Exception:
-                    st.error('입력 형식을 확인하세요. 예: 2,4')
-
-        elif edit_tab == '워터마크 추가':
-            st.info('워터마크로 사용할 텍스트를 입력하세요. (예: Confidential)')
-            watermark_text = st.text_input('워터마크 텍스트 입력', '')
-            color_name = st.selectbox('워터마크 색상 선택', ['빨강', '노랑', '초록', '검정'], index=0)
-            color_map = {
-                '빨강': (255, 0, 0),
-                '노랑': (255, 255, 0),
-                '초록': (0, 128, 0),
-                '검정': (0, 0, 0),
-            }
-            color = color_map[color_name]
-            if st.button('워터마크 추가'):
-                if not watermark_text.strip():
-                    st.error('워터마크 텍스트를 입력하세요.')
+    if edit_tab == 'PDF 암호 설정':
+        if not edit_file:
+            st.warning('먼저 상단에서 PDF 파일을 업로드하세요.')
+        else:
+            files = edit_file if isinstance(edit_file, list) else [edit_file]
+            password = st.text_input('설정할 암호를 입력하세요', type='password')
+            if st.button('PDF 암호 설정'):
+                if not password:
+                    st.error('암호를 입력하세요.')
                 else:
-                    try:
-                        watermarked = add_text_watermark_to_pdf(edit_file, watermark_text, color=color)
-                        st.success('워터마크 추가 완료!')
-                        st.download_button('워터마크 PDF 다운로드', watermarked, file_name='watermarked.pdf', mime='application/pdf')
-                    except Exception as e:
-                        st.error(f'워터마크 추가 중 오류가 발생했습니다: {e}')
+                    for f in files:
+                        try:
+                            encrypted = encrypt_pdf(f, password)
+                            st.success(f"{f.name} 암호 설정 완료!")
+                            st.download_button(f"{f.name} (암호설정) 다운로드", encrypted, file_name=f"encrypted_{f.name}", mime='application/pdf')
+                        except Exception as e:
+                            st.error(f"{f.name} 암호 설정 실패: {e}")
 
-        elif edit_tab == '페이지 순서 변경':
-            st.info('예: 3,1,2 (3→1→2 순서로 재배치)')
-            order_str = st.text_input('새 페이지 순서 입력', '')
-            if st.button('순서 변경'):
+    elif edit_tab == 'PDF 암호 해제':
+        if not edit_file:
+            st.warning('먼저 상단에서 PDF 파일을 업로드하세요.')
+        else:
+            files = edit_file if isinstance(edit_file, list) else [edit_file]
+            passwords = []
+            for i, f in enumerate(files):
+                pw = st.text_input(f"{f.name}의 암호 입력 (없으면 비워두세요)", key=f'unlock_pw_{i}')
+                passwords.append(pw)
+            if st.button('PDF 암호 해제'):
+                results = unlock_pdfs(files, passwords)
+                for fname, data in results.items():
+                    if data:
+                        st.success(f"{fname} 해제 성공!")
+                        st.download_button(f"{fname} 다운로드", data, file_name=f"unlocked_{fname}", mime='application/pdf')
+                    else:
+                        st.error(f"{fname} 해제 실패 (암호 오류 또는 지원 불가)")
+
+    elif edit_tab == '페이지 회전':
+        st.info('예: 1:90,3:180 (1번 페이지 90도, 3번 페이지 180도 회전)')
+        rotate_str = st.text_input('회전할 페이지:각도 입력', '')
+        if st.button('회전 적용'):
+            try:
+                rotations = {}
+                for part in rotate_str.split(','):
+                    if ':' in part:
+                        p, d = part.split(':')
+                        p, d = int(p.strip()), int(d.strip())
+                        if d not in [90, 180, 270]:
+                            raise ValueError
+                        rotations[p] = d
+                rotated = rotate_pdf_pages(edit_file, rotations)
+                st.success('회전 완료!')
+                st.download_button('회전된 PDF 다운로드', rotated, file_name='rotated.pdf', mime='application/pdf')
+            except Exception:
+                st.error('입력 형식을 확인하세요. 예: 1:90,3:180')
+
+    elif edit_tab == '페이지 삭제':
+        st.info('예: 2,4 (2번, 4번 페이지 삭제)')
+        del_str = st.text_input('삭제할 페이지 번호 입력', '')
+        if st.button('페이지 삭제'):
+            try:
+                del_pages = [int(x.strip()) for x in del_str.split(',') if x.strip()]
+                deleted = delete_pdf_pages(edit_file, del_pages)
+                st.success('삭제 완료!')
+                st.download_button('삭제된 PDF 다운로드', deleted, file_name='deleted.pdf', mime='application/pdf')
+            except Exception:
+                st.error('입력 형식을 확인하세요. 예: 2,4')
+
+    elif edit_tab == '워터마크 추가':
+        st.info('워터마크로 사용할 텍스트를 입력하세요. (예: Confidential)')
+        watermark_text = st.text_input('워터마크 텍스트 입력', '')
+        color_name = st.selectbox('워터마크 색상 선택', ['빨강', '노랑', '초록', '검정'], index=0)
+        color_map = {
+            '빨강': (255, 0, 0),
+            '노랑': (255, 255, 0),
+            '초록': (0, 128, 0),
+            '검정': (0, 0, 0),
+        }
+        color = color_map[color_name]
+        if st.button('워터마크 추가'):
+            if not watermark_text.strip():
+                st.error('워터마크 텍스트를 입력하세요.')
+            else:
                 try:
-                    new_order = [int(x.strip()) for x in order_str.split(',') if x.strip()]
-                    reordered = reorder_pdf_pages(edit_file, new_order)
-                    st.success('순서 변경 완료!')
-                    st.download_button('순서 변경 PDF 다운로드', reordered, file_name='reordered.pdf', mime='application/pdf')
-                except Exception:
-                    st.error('입력 형식을 확인하세요. 예: 3,1,2')
+                    watermarked = add_text_watermark_to_pdf(edit_file, watermark_text, color=color)
+                    st.success('워터마크 추가 완료!')
+                    st.download_button('워터마크 PDF 다운로드', watermarked, file_name='watermarked.pdf', mime='application/pdf')
+                except Exception as e:
+                    st.error(f'워터마크 추가 중 오류가 발생했습니다: {e}')
+
+    elif edit_tab == '페이지 순서 변경':
+        st.info('예: 3,1,2 (3→1→2 순서로 재배치)')
+        order_str = st.text_input('새 페이지 순서 입력', '')
+        if st.button('순서 변경'):
+            try:
+                new_order = [int(x.strip()) for x in order_str.split(',') if x.strip()]
+                reordered = reorder_pdf_pages(edit_file, new_order)
+                st.success('순서 변경 완료!')
+                st.download_button('순서 변경 PDF 다운로드', reordered, file_name='reordered.pdf', mime='application/pdf')
+            except Exception:
+                st.error('입력 형식을 확인하세요. 예: 3,1,2')
 
 # 화면 하단에 개발자 정보 표시
 st.markdown("""
